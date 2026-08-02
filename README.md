@@ -33,8 +33,6 @@ during negative-trend months and targeting 18% annualized volatility otherwise.
 
 ![Current and forward log EWMA volatility](figures/volatility_persistence.png)
 
-[Open full-size volatility persistence figure](figures/volatility_persistence.png)
-
 The persistence regression supports using the latest volatility estimate to
 scale near-term exposure. The strategy re-estimates the relationship through
 time with an expanding window rather than using the full-sample coefficients.
@@ -42,8 +40,6 @@ time with an expanding window rather than using the full-sample coefficients.
 ### Trend primarily identifies tail risk
 
 ![Lower-tail probability by trend regime](figures/tail_loss_probabilities.png)
-
-[Open full-size tail probability figure](figures/tail_loss_probabilities.png)
 
 Negative-trend periods have a much greater empirical probability of crossing
 each common lower-tail threshold. The bottom-quintile difference is also
@@ -53,8 +49,6 @@ p = 1.88e-06).
 ### Trend adds little to a current-volatility forecast
 
 ![Partial effect of trend on forward volatility](figures/trend_partial_volatility.png)
-
-[Open full-size partial-regression figure](figures/trend_partial_volatility.png)
 
 The nearly flat partial-regression line shows that the raw relationship between
 trend and forward volatility is largely explained by trend's relationship with
@@ -98,18 +92,12 @@ exposure.
 
 ![Strategy and buy-and-hold equity curves](figures/backtest_equity_curve.png)
 
-[Open full-size equity curve](figures/backtest_equity_curve.png)
-
 The combined strategy's higher average exposure than its time in market reflects
 the use of leverage in calm, positive-trend periods.
 
 ![Strategy exposure through time](figures/backtest_exposure.png)
 
-[Open full-size exposure figure](figures/backtest_exposure.png)
-
 ![Monthly return distributions](figures/backtest_monthly_returns.png)
-
-[Open full-size monthly-return histogram](figures/backtest_monthly_returns.png)
 
 ## Findings by script
 
