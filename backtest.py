@@ -6,9 +6,13 @@ import pandas as pd
 
 DAYS_IN_MONTH = 21
 LAG_MONTHS = 10
+TREND_AVERAGE = "simple"  # "simple" or "linear"
 TRADING_DAYS = 252
 TARGET_VOL = 0.18
-MAX_EXPOSURE = 1.30
+MAX_EXPOSURE = 1.33
+VOL_TARGET_REBALANCING = "coarse"  # "coarse" or "continuous"
+COARSE_REBALANCE_THRESHOLD = 0.0
+ANNUAL_EXPENSE_RATIO = 0.004
 
 
 def expanding_log_vol_forecast(log_vol):
@@ -36,6 +40,72 @@ def expanding_log_vol_forecast(log_vol):
 def equity_curve(returns):
     """Return the growth of one dollar."""
     return (1 + returns).cumprod()
+
+
+def moving_average(values, window, method):
+    """Return a simple or linearly weighted moving average."""
+    if method == "simple":
+        return values.rolling(window).mean()
+    if method == "linear":
+        weights = np.arange(1, window + 1, dtype=float)
+        return values.rolling(window).apply(
+            lambda observations: np.dot(observations, weights) / weights.sum(),
+            raw=True,
+        )
+    raise ValueError(
+        f"Unknown TREND_AVERAGE {method!r}; expected 'simple' or 'linear'."
+    )
+
+
+def volatility_target_exposure(
+    uncapped_target,
+    method,
+    max_exposure,
+    coarse_threshold,
+):
+    """Return capped exposure using daily or thresholded weekly rebalancing."""
+    if method == "continuous":
+        return uncapped_target.clip(lower=0, upper=max_exposure)
+    if method != "coarse":
+        raise ValueError(
+            f"Unknown VOL_TARGET_REBALANCING {method!r}; expected "
+            "'coarse' or 'continuous'."
+        )
+
+    # The first observation in each calendar week is the only day on which a
+    # trade may occur. This also handles weeks whose Monday is a market holiday.
+    week = uncapped_target.index.to_period("W-SUN")
+    rebalance_day = pd.Series(week, index=uncapped_target.index).ne(
+        pd.Series(week, index=uncapped_target.index).shift()
+    )
+
+    exposure = pd.Series(np.nan, index=uncapped_target.index, dtype=float)
+    previous_equity_weight = np.nan
+    for date, target in uncapped_target.items():
+        if pd.isna(target) or not rebalance_day.loc[date] and pd.isna(
+            previous_equity_weight
+        ):
+            continue
+        if pd.isna(previous_equity_weight):
+            selected_target = target
+        elif rebalance_day.loc[date] and abs(
+            target - previous_equity_weight
+        ) > coarse_threshold and not np.isclose(
+            abs(target - previous_equity_weight),
+            coarse_threshold,
+            rtol=0,
+            atol=1e-12,
+        ):
+            selected_target = target
+        else:
+            selected_target = previous_equity_weight
+
+        # Apply the exposure constraint only after the cadence and no-trade
+        # threshold have selected the period's target weight.
+        previous_equity_weight = np.clip(selected_target, 0, max_exposure)
+        exposure.loc[date] = previous_equity_weight
+
+    return exposure
 
 
 def drawdown_depths(returns):
@@ -125,8 +195,10 @@ df["predicted_log_vol_next"] = expanding_log_vol_forecast(
     df["log_ewma_vol"]
 )
 
-# Compound daily returns into calendar-month returns. Each month's signal is
-# the average return of the ten fully completed months before it.
+# Compound daily returns into calendar-month returns. Each month's signal uses
+# the configured average of the LAG_MONTHS fully completed months before it.
+# For "linear", weights increase from 1 for the oldest month to LAG_MONTHS for
+# the newest month.
 month = df.index.to_period("M")
 monthly_returns = (
     df["stock_mkt"]
@@ -135,7 +207,11 @@ monthly_returns = (
     .prod(min_count=1)
     .sub(1)
 )
-trend_by_month = monthly_returns.shift(1).rolling(LAG_MONTHS).mean()
+trend_by_month = moving_average(
+    monthly_returns.shift(1),
+    LAG_MONTHS,
+    TREND_AVERAGE,
+)
 df["trend"] = pd.Series(month, index=df.index).map(trend_by_month)
 df["trend_gate"] = (df["trend"] >= 0).astype(float)
 
@@ -148,25 +224,36 @@ df["predicted_annual_vol"] = (
     df["predicted_daily_vol"] * np.sqrt(TRADING_DAYS)
 )
 
-vol_scaled_exposure = (
+uncapped_target_exposure = (
     TARGET_VOL / df["predicted_annual_vol"]
-).clip(lower=0, upper=MAX_EXPOSURE)
-df["exposure"] = vol_scaled_exposure * df["trend_gate"]
+) * df["trend_gate"]
+df["exposure"] = volatility_target_exposure(
+    uncapped_target_exposure,
+    VOL_TARGET_REBALANCING,
+    MAX_EXPOSURE,
+    COARSE_REBALANCE_THRESHOLD,
+)
 
 # Begin only when both the monthly trend and prior-day volatility forecast are
 # available. Cash earns RF, and exposure above one is financed at RF.
 backtest = df[
     ["stock_mkt", "RF", "trend", "trend_gate", "exposure"]
 ].dropna().copy()
+
+# Accrue the static annual expense ratio evenly across trading days for both
+# active strategies, independent of their exposure changes.
+daily_expense = ANNUAL_EXPENSE_RATIO / TRADING_DAYS
 backtest["strategy_return"] = (
     backtest["RF"]
     + backtest["exposure"]
     * (backtest["stock_mkt"] - backtest["RF"])
+    - daily_expense
 )
 backtest["trend_only_return"] = (
     backtest["RF"]
     + backtest["trend_gate"]
     * (backtest["stock_mkt"] - backtest["RF"])
+    - daily_expense
 )
 backtest["buy_hold_return"] = backtest["stock_mkt"]
 
