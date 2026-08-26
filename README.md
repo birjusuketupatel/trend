@@ -6,6 +6,9 @@ suggests that trend is more useful as a **tail-risk filter** than as a forecast
 of average returns, while current volatility is highly informative about
 near-term volatility. The backtest combines those findings by holding no equity
 during negative-trend months and targeting 18% annualized volatility otherwise.
+Volatility targeting can be rebalanced continuously or on a coarse weekly
+schedule. A separate live-signal script extends Fama-French history with the
+S&P 500 Total Return Index and reports the latest trend and volatility readings.
 
 ## Main findings
 
@@ -22,10 +25,11 @@ during negative-trend months and targeting 18% annualized volatility otherwise.
 - **Trend does not add material information to current volatility when
   predicting forward volatility.** Once current log volatility is included,
   orthogonalized trend has a coefficient of -0.355 and a p-value of 0.546.
-- **The combined strategy improved historical risk-adjusted performance.** It
-  produced an 11.66% annualized geometric return with 13.05% arithmetic
-  volatility and a 0.68 Sharpe ratio, versus 9.79%, 17.17%, and 0.45 for buy and
-  hold. Its maximum drawdown was -47.68%, compared with -84.07%.
+- **The combined strategy improved historical risk-adjusted performance.** With
+  the current coarse-rebalancing settings, it produced an 11.23% annualized
+  geometric return with 13.48% arithmetic volatility and a 0.63 Sharpe ratio,
+  versus 9.79%, 17.17%, and 0.45 for buy and hold. Its maximum drawdown was
+  -54.00%, compared with -84.07%.
 
 ## Key evidence
 
@@ -66,8 +70,15 @@ information available before each realized strategy return:
    current log EWMA volatility, using observed training pairs only.
 3. Convert predicted log volatility back to ordinary volatility and choose the
    next day's exposure to target 18% annualized volatility.
-4. Cap equity exposure at 1.3x. Uninvested cash earns the Fama-French risk-free
-   return, and leverage is financed at the same rate.
+4. Set `VOL_TARGET_REBALANCING` to `"continuous"` for daily adjustment or
+   `"coarse"` to permit adjustment only on the first trading day of each week.
+   In coarse mode, calculate the desired weight without the exposure cap and
+   trade only if its distance from the previous equity weight exceeds
+   `COARSE_REBALANCE_THRESHOLD`. The current threshold is 0%, so every changed
+   weekly target is implemented; setting it to 5% creates a five-percentage-
+   point no-trade band.
+5. Apply the 1.33x exposure cap after the rebalance rule. Uninvested cash earns
+   the Fama-French risk-free return, and leverage is financed at the same rate.
 
 Taxes, transaction costs, slippage, and market impact are not deducted.
 
@@ -79,16 +90,16 @@ exposure.
 
 | Statistic | Combined strategy | Trend only | Buy and hold |
 |---|---:|---:|---:|
-| Arithmetic mean | 11.89% | 10.71% | 10.82% |
-| Arithmetic standard deviation | 13.05% | 13.14% | 17.17% |
-| Arithmetic Sharpe | 0.68 | 0.59 | 0.45 |
-| Geometric mean | 11.66% | 10.34% | 9.79% |
-| Geometric standard deviation | 13.98% | 14.09% | 18.76% |
-| Maximum drawdown | -47.68% | -46.05% | -84.07% |
-| Average of five worst drawdowns | -33.93% | -36.91% | -54.57% |
-| Average exposure | 92.49% | 76.48% | 100.00% |
-| Time in market | 76.48% | 76.48% | 100.00% |
-| Annual turnover | 333.23% | 85.28% | 0.00% |
+| Arithmetic mean | 11.56% | 10.31% | 10.82% |
+| Arithmetic standard deviation | 13.48% | 13.14% | 17.17% |
+| Arithmetic Sharpe | 0.63 | 0.56 | 0.45 |
+| Geometric mean | 11.23% | 9.90% | 9.79% |
+| Geometric standard deviation | 14.49% | 14.09% | 18.76% |
+| Maximum drawdown | -54.00% | -46.93% | -84.07% |
+| Average of five worst drawdowns | -37.88% | -37.52% | -54.57% |
+| Average exposure | 94.27% | 76.48% | 100.00% |
+| Time in market | 76.45% | 76.48% | 100.00% |
+| Annual turnover | 232.35% | 85.28% | 0.00% |
 
 ![Strategy and buy-and-hold equity curves](figures/backtest_equity_curve.png)
 
@@ -110,12 +121,13 @@ the use of leverage in calm, positive-trend periods.
 | `trend_and_avg_return.py` | Finds little linear predictability of next-month mean returns from the continuous trend signal (R-squared 0.2%, p = 0.158). Positive-trend returns average 1.13% versus 0.35% in negative-trend months, with p = 0.098 for the difference. [Return scatter](figures/trend_next_month_return.png) |
 | `tail_behavior.py` | Shows that negative-trend months have materially higher lower-tail event probabilities. Bottom-quintile probability rises from 17.1% to 29.8%. Negative-trend months also contain more top-quintile rallies (26.6% versus 18.1%), indicating generally wider tails. [Tail probabilities](figures/tail_loss_probabilities.png) |
 | `downtrend_continuation.py` | In the crash logistic regression, positive trend reduces crash log odds after controlling for volatility (coefficient -0.214, p = 0.014), while higher log volatility raises them (0.631, p < 0.001). Trend is insignificant for rallies after controlling for volatility (p = 0.992), while volatility remains strongly positive. |
-| `backtest.py` | Implements the lookahead-safe trend gate and expanding volatility forecast, prints performance for the combined strategy, trend-only strategy, and buy and hold, and displays the equity, exposure, and monthly-return-distribution figures. |
+| `backtest.py` | Implements the lookahead-safe trend gate, expanding volatility forecast, and configurable continuous or coarse volatility-target rebalancing. It prints performance for the combined strategy, trend-only strategy, and buy and hold and displays the equity, exposure, and monthly-return-distribution figures. |
+| `calc_signals.py` | Downloads Fama-French U.S. market total returns, supplements dates after the latest Fama-French observation with Yahoo Finance's S&P 500 Total Return Index (`^SP500TR`), and reports the latest live signals. It plots the 10-month trend signal and annualized 21-day EWMA volatility over the past 12 months, forecasts next-day volatility, and recommends leverage using a 17% target and 1.33x cap. |
 
 ## Running the analysis
 
-Install `numpy`, `pandas`, `matplotlib`, `scipy`, `statsmodels`, and
-`pandas-datareader`, then refresh the input data if needed:
+Install `numpy`, `pandas`, `matplotlib`, `scipy`, `statsmodels`,
+`pandas-datareader`, and `yfinance`, then refresh the input data if needed:
 
 ```powershell
 python download.py
@@ -126,20 +138,28 @@ Each analysis is a standalone script. For example:
 ```powershell
 python tail_behavior.py
 python backtest.py
+python calc_signals.py
 ```
+
+`calc_signals.py` downloads both sources when it runs and does not depend on
+`data/us_stocks.csv`. Its console report includes the signal date, last
+Fama-French date, current annualized EWMA volatility, forecast annualized
+volatility, capped recommended leverage, and the trend value and direction set
+at the start of the current month. The recommended leverage is the
+volatility-targeting weight; the trend direction is reported separately.
 
 ## Interpretation and limitations
 
 - Results are historical and largely in-sample; they do not establish that the
   strategy will retain the same performance out of sample.
-- The 10-month trend horizon, 18% volatility target, and 1.3x cap are fixed
+- The 10-month trend horizon, 18% backtest volatility target, and 1.33x cap are fixed
   research choices. Selecting them after inspecting the same history can create
   data-mining bias even though the backtest's daily signals contain no direct
   lookahead.
 - The strategy assumes an end-of-day signal can set exposure for the following
   close-to-close return. A more conservative implementation could impose an
   additional execution lag.
-- The combined strategy's 333% annual turnover is economically important.
+- The combined strategy's 232% annual turnover is economically important.
   Because trading costs are excluded, realized net performance would be lower.
 - Fama-French historical data may be revised, so this is not a point-in-time
   data-vintage test.

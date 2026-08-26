@@ -10,8 +10,8 @@ TREND_AVERAGE = "simple"  # "simple" or "linear"
 TRADING_DAYS = 252
 TARGET_VOL = 0.18
 MAX_EXPOSURE = 1.33
-VOL_TARGET_REBALANCING = "coarse"  # "coarse" or "continuous"
-COARSE_REBALANCE_THRESHOLD = 0.0
+VOL_TARGET_REBALANCING = "continuous"  # "coarse" or "continuous"
+COARSE_REBALANCE_THRESHOLD = 0.1
 ANNUAL_EXPENSE_RATIO = 0.004
 
 
