@@ -1,5 +1,11 @@
 import pandas as pd
 from pandas_datareader import data as pdr
+from pandas_datareader import famafrench
+
+
+# pandas-datareader still defines this endpoint with HTTP, while the Kenneth
+# French data library is available over HTTPS.
+famafrench._URL = famafrench._URL.replace("http://", "https://")
 
 raw = pdr.DataReader("F-F_Research_Data_Factors_daily", "famafrench", start="1900-01-01")
 

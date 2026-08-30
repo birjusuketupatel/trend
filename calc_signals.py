@@ -3,6 +3,8 @@ from matplotlib.ticker import PercentFormatter
 import numpy as np
 import pandas as pd
 from pandas_datareader import data as pdr
+from pandas_datareader import famafrench
+import statsmodels.api as sm
 import yfinance as yf
 
 
@@ -13,6 +15,11 @@ TARGET_VOL = 0.15
 MAX_EXPOSURE = 1.00
 FAMA_FRENCH_DATASET = "F-F_Research_Data_Factors_daily"
 SP500_TOTAL_RETURN_TICKER = "^SP500TR"
+
+
+# pandas-datareader still defines this endpoint with HTTP, while the Kenneth
+# French data library is available over HTTPS.
+famafrench._URL = famafrench._URL.replace("http://", "https://")
 
 
 def load_fama_french_returns():
@@ -95,38 +102,57 @@ def calculate_signals(returns):
 
 
 def forecast_volatility(annualized_ewma_vol):
-    """Fit log-volatility persistence and forecast the next trading day."""
+    """Fit 21-trading-day log-volatility persistence and forecast forward."""
     daily_vol = annualized_ewma_vol / np.sqrt(TRADING_DAYS)
-    log_vol = np.log(daily_vol)
-    regression = pd.concat(
+    log_daily_volatility = np.log(daily_vol)
+
+    # Sample once per 21 trading days so adjacent regression observations do
+    # not reuse the same daily volatility estimates.
+    sampled_log_daily_volatility = log_daily_volatility.iloc[::DAYS_IN_MONTH]
+    regression_data = pd.concat(
         {
-            "x": log_vol.shift(1),
-            "y": log_vol,
+            "current_log_daily_volatility": sampled_log_daily_volatility,
+            "forward_log_daily_volatility": (
+                sampled_log_daily_volatility.shift(-1)
+            ),
         },
         axis=1,
     ).dropna()
-    if len(regression) < 2:
+    if len(regression_data) < 2:
         raise ValueError("Not enough observations to train the volatility model.")
 
-    design = np.column_stack(
-        [np.ones(len(regression)), regression["x"].to_numpy()]
+    regression_design = pd.DataFrame(
+        {
+            "intercept": 1.0,
+            "current_log_daily_volatility": regression_data[
+                "current_log_daily_volatility"
+            ],
+        },
+        index=regression_data.index,
     )
-    intercept, slope = np.linalg.lstsq(
-        design,
-        regression["y"].to_numpy(),
-        rcond=None,
-    )[0]
-    forecast_daily_vol = np.exp(intercept + slope * log_vol.iloc[-1])
-    return forecast_daily_vol * np.sqrt(TRADING_DAYS)
+    volatility_model = sm.OLS(
+        regression_data["forward_log_daily_volatility"],
+        regression_design,
+    ).fit()
+    log_volatility_intercept = volatility_model.params["intercept"]
+    volatility_persistence = volatility_model.params[
+        "current_log_daily_volatility"
+    ]
+    forecast_daily_vol = np.exp(
+        log_volatility_intercept
+        + volatility_persistence * log_daily_volatility.iloc[-1]
+    )
+    return forecast_daily_vol * np.sqrt(TRADING_DAYS), volatility_model
 
 
 def print_signal_report(
     signals,
     trend_by_month,
     forecast_vol,
+    volatility_model,
     last_fama_french_date,
 ):
-    """Print current volatility, leverage, and monthly trend readings."""
+    """Print current signals and volatility-regression results."""
     latest_date = signals.index.max()
     current_month = latest_date.to_period("M")
     trend = trend_by_month.loc[current_month]
@@ -143,13 +169,15 @@ def print_signal_report(
     print(f"Signal date: {latest_date:%Y-%m-%d}")
     print(f"Fama-French data through: {last_fama_french_date:%Y-%m-%d}")
     print(f"EWMA volatility estimate: {ewma_vol:.2%}")
-    print(f"Forecast volatility: {forecast_vol:.2%}")
+    print(f"21-trading-day-ahead volatility forecast: {forecast_vol:.2%}")
     print(f"Recommended leverage: {leverage:.2f}x")
     print(
         f"Trend signal at start of {current_month.strftime('%B %Y')}: "
         f"{trend:.2%}"
     )
     print(f"Trend direction: {trend_direction}")
+    print("\n21-trading-day log-volatility persistence regression:")
+    print(volatility_model.summary())
 
 
 def plot_recent_signals(signals):
@@ -205,11 +233,12 @@ def plot_recent_signals(signals):
 def main():
     returns, last_fama_french_date = load_combined_returns()
     signals, trend_by_month = calculate_signals(returns)
-    forecast_vol = forecast_volatility(signals["ewma_vol"])
+    forecast_vol, volatility_model = forecast_volatility(signals["ewma_vol"])
     print_signal_report(
         signals,
         trend_by_month,
         forecast_vol,
+        volatility_model,
         last_fama_french_date,
     )
     plot_recent_signals(signals)

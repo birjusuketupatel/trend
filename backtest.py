@@ -15,26 +15,59 @@ COARSE_REBALANCE_THRESHOLD = 0.1
 ANNUAL_EXPENSE_RATIO = 0.004
 
 
-def expanding_log_vol_forecast(log_vol):
-    """Predict next-day log volatility with an expanding OLS regression."""
-    # On date t, log_vol[t] is the latest observed response and
-    # log_vol[t - 1] is its predictor. Thus every fitted pair is known at t.
-    regression_x = log_vol.shift(1)
-    regression_y = log_vol
-    valid_pair = regression_x.notna() & regression_y.notna()
-    regression_x = regression_x.where(valid_pair)
-    regression_y = regression_y.where(valid_pair)
+def expanding_log_vol_forecast(log_daily_volatility):
+    """Predict 21-day-forward log volatility with expanding OLS."""
+    sampled_log_daily_volatility = log_daily_volatility.iloc[::DAYS_IN_MONTH]
+
+    # Each regression pair is separated by 21 trading days. The pair ending
+    # on a sampling date becomes available only on that date.
+    current_log_daily_volatility = sampled_log_daily_volatility.shift(1)
+    forward_log_daily_volatility = sampled_log_daily_volatility
+    valid_pair = (
+        current_log_daily_volatility.notna()
+        & forward_log_daily_volatility.notna()
+    )
+    current_log_daily_volatility = current_log_daily_volatility.where(
+        valid_pair
+    )
+    forward_log_daily_volatility = forward_log_daily_volatility.where(
+        valid_pair
+    )
 
     # These expanding moments give the intercept and slope from OLS while
     # avoiding a slow refit of the entire history on every date.
-    mean_x = regression_x.expanding(min_periods=2).mean()
-    mean_y = regression_y.expanding(min_periods=2).mean()
-    variance_x = regression_x.expanding(min_periods=2).var()
-    covariance_xy = regression_x.expanding(min_periods=2).cov(regression_y)
+    mean_current_log_volatility = current_log_daily_volatility.expanding(
+        min_periods=2
+    ).mean()
+    mean_forward_log_volatility = forward_log_daily_volatility.expanding(
+        min_periods=2
+    ).mean()
+    variance_current_log_volatility = (
+        current_log_daily_volatility.expanding(min_periods=2).var()
+    )
+    covariance_log_volatility = current_log_daily_volatility.expanding(
+        min_periods=2
+    ).cov(forward_log_daily_volatility)
 
-    slope = covariance_xy / variance_x
-    intercept = mean_y - slope * mean_x
-    return intercept + slope * log_vol
+    volatility_persistence = (
+        covariance_log_volatility / variance_current_log_volatility
+    )
+    log_volatility_intercept = (
+        mean_forward_log_volatility
+        - volatility_persistence * mean_current_log_volatility
+    )
+
+    # Carry the most recently estimable coefficients between sampling dates.
+    daily_volatility_persistence = volatility_persistence.reindex(
+        log_daily_volatility.index
+    ).ffill()
+    daily_log_volatility_intercept = log_volatility_intercept.reindex(
+        log_daily_volatility.index
+    ).ffill()
+    return (
+        daily_log_volatility_intercept
+        + daily_volatility_persistence * log_daily_volatility
+    )
 
 
 def equity_curve(returns):
@@ -191,7 +224,7 @@ df["ewma_vol"] = (
     .std()
 )
 df["log_ewma_vol"] = np.log(df["ewma_vol"])
-df["predicted_log_vol_next"] = expanding_log_vol_forecast(
+df["predicted_log_vol_21_days_ahead"] = expanding_log_vol_forecast(
     df["log_ewma_vol"]
 )
 
@@ -215,17 +248,17 @@ trend_by_month = moving_average(
 df["trend"] = pd.Series(month, index=df.index).map(trend_by_month)
 df["trend_gate"] = (df["trend"] >= 0).astype(float)
 
-# The forecast made after date t is used for date t+1. Convert the prediction
-# back from log volatility before calculating the volatility-scaled exposure.
-df["predicted_daily_vol"] = np.exp(
-    df["predicted_log_vol_next"].shift(1)
+# The 21-day-ahead forecast made after date t is first usable for exposure on
+# date t+1. Convert it from log volatility before sizing the position.
+df["predicted_daily_vol_21_days_ahead"] = np.exp(
+    df["predicted_log_vol_21_days_ahead"].shift(1)
 )
-df["predicted_annual_vol"] = (
-    df["predicted_daily_vol"] * np.sqrt(TRADING_DAYS)
+df["predicted_annual_vol_21_days_ahead"] = (
+    df["predicted_daily_vol_21_days_ahead"] * np.sqrt(TRADING_DAYS)
 )
 
 uncapped_target_exposure = (
-    TARGET_VOL / df["predicted_annual_vol"]
+    TARGET_VOL / df["predicted_annual_vol_21_days_ahead"]
 ) * df["trend_gate"]
 df["exposure"] = volatility_target_exposure(
     uncapped_target_exposure,
