@@ -15,39 +15,43 @@ COARSE_REBALANCE_THRESHOLD = 0.1
 ANNUAL_EXPENSE_RATIO = 0.004
 
 
-def expanding_log_vol_forecast(log_daily_volatility):
-    """Predict 21-day-forward log volatility with expanding OLS."""
-    sampled_log_daily_volatility = log_daily_volatility.iloc[::DAYS_IN_MONTH]
+def expanding_log_vol_forecast(log_annualized_volatility):
+    """Predict 21-day-forward log annualized volatility with expanding OLS."""
+    sampled_log_annualized_volatility = log_annualized_volatility.iloc[
+        ::DAYS_IN_MONTH
+    ]
 
     # Each regression pair is separated by 21 trading days. The pair ending
     # on a sampling date becomes available only on that date.
-    current_log_daily_volatility = sampled_log_daily_volatility.shift(1)
-    forward_log_daily_volatility = sampled_log_daily_volatility
+    current_log_annualized_volatility = (
+        sampled_log_annualized_volatility.shift(1)
+    )
+    forward_log_annualized_volatility = sampled_log_annualized_volatility
     valid_pair = (
-        current_log_daily_volatility.notna()
-        & forward_log_daily_volatility.notna()
+        current_log_annualized_volatility.notna()
+        & forward_log_annualized_volatility.notna()
     )
-    current_log_daily_volatility = current_log_daily_volatility.where(
-        valid_pair
+    current_log_annualized_volatility = (
+        current_log_annualized_volatility.where(valid_pair)
     )
-    forward_log_daily_volatility = forward_log_daily_volatility.where(
-        valid_pair
+    forward_log_annualized_volatility = (
+        forward_log_annualized_volatility.where(valid_pair)
     )
 
     # These expanding moments give the intercept and slope from OLS while
     # avoiding a slow refit of the entire history on every date.
-    mean_current_log_volatility = current_log_daily_volatility.expanding(
-        min_periods=2
-    ).mean()
-    mean_forward_log_volatility = forward_log_daily_volatility.expanding(
-        min_periods=2
-    ).mean()
-    variance_current_log_volatility = (
-        current_log_daily_volatility.expanding(min_periods=2).var()
+    mean_current_log_volatility = (
+        current_log_annualized_volatility.expanding(min_periods=2).mean()
     )
-    covariance_log_volatility = current_log_daily_volatility.expanding(
+    mean_forward_log_volatility = (
+        forward_log_annualized_volatility.expanding(min_periods=2).mean()
+    )
+    variance_current_log_volatility = (
+        current_log_annualized_volatility.expanding(min_periods=2).var()
+    )
+    covariance_log_volatility = current_log_annualized_volatility.expanding(
         min_periods=2
-    ).cov(forward_log_daily_volatility)
+    ).cov(forward_log_annualized_volatility)
 
     volatility_persistence = (
         covariance_log_volatility / variance_current_log_volatility
@@ -59,14 +63,14 @@ def expanding_log_vol_forecast(log_daily_volatility):
 
     # Carry the most recently estimable coefficients between sampling dates.
     daily_volatility_persistence = volatility_persistence.reindex(
-        log_daily_volatility.index
+        log_annualized_volatility.index
     ).ffill()
     daily_log_volatility_intercept = log_volatility_intercept.reindex(
-        log_daily_volatility.index
+        log_annualized_volatility.index
     ).ffill()
     return (
         daily_log_volatility_intercept
-        + daily_volatility_persistence * log_daily_volatility
+        + daily_volatility_persistence * log_annualized_volatility
     )
 
 
@@ -223,9 +227,10 @@ df["ewma_vol"] = (
     .ewm(span=DAYS_IN_MONTH, adjust=True)
     .std()
 )
-df["log_ewma_vol"] = np.log(df["ewma_vol"])
-df["predicted_log_vol_21_days_ahead"] = expanding_log_vol_forecast(
-    df["log_ewma_vol"]
+df["annualized_ewma_vol"] = df["ewma_vol"] * np.sqrt(TRADING_DAYS)
+df["log_annualized_ewma_vol"] = np.log(df["annualized_ewma_vol"])
+df["predicted_log_annualized_vol_21_days_ahead"] = (
+    expanding_log_vol_forecast(df["log_annualized_ewma_vol"])
 )
 
 # Compound daily returns into calendar-month returns. Each month's signal uses
@@ -250,11 +255,8 @@ df["trend_gate"] = (df["trend"] >= 0).astype(float)
 
 # The 21-day-ahead forecast made after date t is first usable for exposure on
 # date t+1. Convert it from log volatility before sizing the position.
-df["predicted_daily_vol_21_days_ahead"] = np.exp(
-    df["predicted_log_vol_21_days_ahead"].shift(1)
-)
 df["predicted_annual_vol_21_days_ahead"] = (
-    df["predicted_daily_vol_21_days_ahead"] * np.sqrt(TRADING_DAYS)
+    np.exp(df["predicted_log_annualized_vol_21_days_ahead"].shift(1))
 )
 
 uncapped_target_exposure = (
@@ -294,6 +296,10 @@ if (backtest["exposure"] < 0).any() or (
     backtest["exposure"] > MAX_EXPOSURE
 ).any():
     raise ValueError("Exposure is outside the permitted range.")
+
+# Save daily returns, signals, and exposure for the backtested dates.
+backtest.to_csv("data/returns.csv", index_label="Date")
+print(f"wrote {len(backtest)} rows to 'data/returns.csv'")
 
 # Print performance for the strategy and a fully invested benchmark.
 statistics = {

@@ -102,18 +102,21 @@ def calculate_signals(returns):
 
 
 def forecast_volatility(annualized_ewma_vol):
-    """Fit 21-trading-day log-volatility persistence and forecast forward."""
-    daily_vol = annualized_ewma_vol / np.sqrt(TRADING_DAYS)
-    log_daily_volatility = np.log(daily_vol)
+    """Fit 21-day log annualized-volatility persistence and forecast forward."""
+    log_annualized_volatility = np.log(annualized_ewma_vol)
 
     # Sample once per 21 trading days so adjacent regression observations do
     # not reuse the same daily volatility estimates.
-    sampled_log_daily_volatility = log_daily_volatility.iloc[::DAYS_IN_MONTH]
+    sampled_log_annualized_volatility = log_annualized_volatility.iloc[
+        ::DAYS_IN_MONTH
+    ]
     regression_data = pd.concat(
         {
-            "current_log_daily_volatility": sampled_log_daily_volatility,
-            "forward_log_daily_volatility": (
-                sampled_log_daily_volatility.shift(-1)
+            "current_log_annualized_volatility": (
+                sampled_log_annualized_volatility
+            ),
+            "forward_log_annualized_volatility": (
+                sampled_log_annualized_volatility.shift(-1)
             ),
         },
         axis=1,
@@ -124,25 +127,25 @@ def forecast_volatility(annualized_ewma_vol):
     regression_design = pd.DataFrame(
         {
             "intercept": 1.0,
-            "current_log_daily_volatility": regression_data[
-                "current_log_daily_volatility"
+            "current_log_annualized_volatility": regression_data[
+                "current_log_annualized_volatility"
             ],
         },
         index=regression_data.index,
     )
     volatility_model = sm.OLS(
-        regression_data["forward_log_daily_volatility"],
+        regression_data["forward_log_annualized_volatility"],
         regression_design,
     ).fit()
     log_volatility_intercept = volatility_model.params["intercept"]
     volatility_persistence = volatility_model.params[
-        "current_log_daily_volatility"
+        "current_log_annualized_volatility"
     ]
-    forecast_daily_vol = np.exp(
+    forecast_annualized_volatility = np.exp(
         log_volatility_intercept
-        + volatility_persistence * log_daily_volatility.iloc[-1]
+        + volatility_persistence * log_annualized_volatility.iloc[-1]
     )
-    return forecast_daily_vol * np.sqrt(TRADING_DAYS), volatility_model
+    return forecast_annualized_volatility, volatility_model
 
 
 def print_signal_report(
@@ -176,7 +179,7 @@ def print_signal_report(
         f"{trend:.2%}"
     )
     print(f"Trend direction: {trend_direction}")
-    print("\n21-trading-day log-volatility persistence regression:")
+    print("\n21-trading-day log annualized-volatility regression:")
     print(volatility_model.summary())
 
 
