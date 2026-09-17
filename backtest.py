@@ -284,6 +284,9 @@ backtest["strategy_return"] = (
     * (backtest["stock_mkt"] - backtest["RF"])
     - daily_expense
 )
+backtest["strategy_excess_return"] = (
+    backtest["strategy_return"] - backtest["RF"]
+)
 backtest["trend_only_return"] = (
     backtest["RF"]
     + backtest["trend_gate"]
